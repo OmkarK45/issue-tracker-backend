@@ -18,6 +18,18 @@ router.post('/:id/comment', requireAuth, async (req: ExpressRequest, res) => {
 				issue: { connect: { id } },
 				author: { connect: { id: user?.id } },
 			},
+			include: { author: { select: { username: true } } },
+		})
+
+		const issueActivity = await prisma.issueActivity.create({
+			data: {
+				type: 'COMMENTED',
+				issue: { connect: { id: newComment.issueId } },
+				author: {
+					connect: { id: newComment.authorId },
+				},
+				text: `${newComment.author.username} commented on issue : ${text}`,
+			},
 		})
 
 		return res.json({
@@ -114,11 +126,14 @@ router.post('/:id/edit', requireAuth, async (req: ExpressRequest, res) => {
 		const comment = await prisma.comment.update({
 			where: { id },
 			data: { text },
+			include: {
+				author: { select: { username: true } },
+			},
 		})
 
 		return res.json({
 			success: true,
-			data: comment,
+			data: { comment },
 		})
 	} catch (e) {
 		return res.json({
@@ -128,3 +143,5 @@ router.post('/:id/edit', requireAuth, async (req: ExpressRequest, res) => {
 		})
 	}
 })
+
+export { router as CommentController }

@@ -1,7 +1,12 @@
-import { Router } from 'express'
+import { StatusType } from '@prisma/client'
+import e, { Router } from 'express'
 import { prisma } from '../config/db'
 import { ExpressRequest } from '../config/express'
 import { requireAuth } from '../middlewares/AuthMiddleware'
+import {
+	generatePaginationResult,
+	getPaginationArgs,
+} from '../utils/prismaPaginationArgs'
 import { HttpStatus } from '../utils/statusCodes'
 
 const router = Router()
@@ -31,6 +36,7 @@ router.post('/new', requireAuth, async (req: ExpressRequest, res) => {
 					},
 				},
 			},
+			include: { application: { select: { name: true } } },
 		})
 
 		const issueActivity = await prisma.issueActivity.create({
@@ -54,6 +60,7 @@ router.post('/new', requireAuth, async (req: ExpressRequest, res) => {
 			},
 		})
 	} catch (e) {
+		console.log(e)
 		return res.json({
 			success: false,
 			code: HttpStatus.INTERNAL_SERVER_ERROR,
@@ -79,6 +86,11 @@ router.post('/:id/update', requireAuth, async (req: ExpressRequest, res) => {
 				type,
 				status,
 			},
+			include: {
+				createdBy: {
+					select: { name: true, email: true, id: true },
+				},
+			},
 		})
 
 		const issueActivity = await prisma.issueActivity.create({
@@ -93,7 +105,7 @@ router.post('/:id/update', requireAuth, async (req: ExpressRequest, res) => {
 					: type
 					? `${user?.name} updated issue type to ${type}`
 					: description
-					? `${user?.name} updated issue description to ${description}`
+					? `${user?.name} updated issue description.`
 					: `${user?.name} updated issue title to ${title}`,
 				type: 'UPDATED',
 				author: {
@@ -120,7 +132,7 @@ router.post('/:id/update', requireAuth, async (req: ExpressRequest, res) => {
 //  assign issue to list of users
 router.post('/:id/assign', requireAuth, async (req: ExpressRequest, res) => {
 	const user = req.user
-	const { users } = req.body as { users: string[] }
+	const { assignedUserId } = req.body as { assignedUserId: string }
 
 	try {
 		const updatedIssue = await prisma.issue.update({
@@ -129,8 +141,13 @@ router.post('/:id/assign', requireAuth, async (req: ExpressRequest, res) => {
 			},
 			data: {
 				assigned_to: {
-					connect: users.map((user) => ({ id: user })),
+					create: {
+						user: { connect: { id: assignedUserId } },
+					},
 				},
+			},
+			include: {
+				assigned_to: { select: { user: { select: { name: true, id: true } } } },
 			},
 		})
 
@@ -139,7 +156,10 @@ router.post('/:id/assign', requireAuth, async (req: ExpressRequest, res) => {
 				issue: {
 					connect: { id: updatedIssue.id },
 				},
-				text: `${user?.name} assigned issue to ${users.length} users`,
+				text: `${user?.name} assigned issue to ${
+					updatedIssue.assigned_to.find((x) => x.user.id === assignedUserId)
+						?.user.name
+				}`,
 				type: 'ASSIGNED',
 				author: {
 					connect: { id: user?.id },
@@ -155,30 +175,98 @@ router.post('/:id/assign', requireAuth, async (req: ExpressRequest, res) => {
 			},
 		})
 	} catch (e) {
+		console.log(e)
 		return res.json({
 			success: false,
 			error: 'Failed to assign issue.',
 		})
 	}
 })
+// unassign an issue
+router.post('/:id/unassign', requireAuth, async (req: ExpressRequest, res) => {
+	const user = req.user
+	const { assignedUserId } = req.body as { assignedUserId: string }
+
+	try {
+		const unAssignedUser = await prisma.user.findUnique({
+			where: { id: assignedUserId },
+		})
+		const issue = await prisma.issue.findUnique({
+			where: { id: req.params.id },
+		})
+
+		await prisma.issuesOnUser.delete({
+			where: {
+				userId_issueId: {
+					issueId: issue?.id!,
+					userId: assignedUserId,
+				},
+			},
+		})
+		const updatedIssue = await prisma.issue.findUnique({
+			where: { id: req.params.id },
+		})
+		const issueActivity = await prisma.issueActivity.create({
+			data: {
+				issue: {
+					connect: { id: issue?.id },
+				},
+				text: `${user?.name} unassigned issue from ${unAssignedUser?.name}`,
+				type: 'UNASSIGNED',
+				author: {
+					connect: { id: user?.id },
+				},
+			},
+		})
+		return res.json({
+			success: true,
+			data: { issueActivity, updatedIssue },
+		})
+	} catch (e) {
+		console.log(e)
+		return res.json({
+			message: 'Failed to unassign issue.',
+			success: false,
+		})
+	}
+})
 
 // Get all issues
 router.get(
-	'/:application_id/issues',
+	'/:application_id/all',
 	requireAuth,
 	async (req: ExpressRequest, res) => {
+		const args = getPaginationArgs(req)
+		const status = req.query.status as StatusType
+
 		try {
+			const totalCount = await prisma.issue.count({
+				where: {
+					applicationId: req.params.application_id,
+				},
+			})
+
 			const issues = await prisma.issue.findMany({
 				where: {
 					applicationId: req.params.application_id,
+					status,
 				},
 				orderBy: {
 					createdAt: 'desc',
 				},
+				include: { application: { select: { name: true } } },
+				take: args.limit,
+				skip: args.startIndex,
+			})
+
+			const pageInfo = generatePaginationResult({
+				...args,
+				totalCount,
 			})
 
 			return res.json({
 				success: true,
+				pageInfo,
 				data: issues,
 			})
 		} catch (e) {
@@ -219,6 +307,7 @@ router.get('/:id', requireAuth, async (req: ExpressRequest, res) => {
 				id: req.params.id,
 			},
 			include: {
+				issueActivity: true,
 				assigned_to: {
 					select: {
 						user: {
@@ -230,7 +319,13 @@ router.get('/:id', requireAuth, async (req: ExpressRequest, res) => {
 					},
 				},
 				comments: true,
-				createdBy: true,
+				createdBy: {
+					select: {
+						name: true,
+						email: true,
+						id: true,
+					},
+				},
 				_count: {
 					select: {
 						comments: true,
@@ -298,7 +393,24 @@ router.get(
 	'/:application_id/issues/mine',
 	requireAuth,
 	async (req: ExpressRequest, res) => {
+		const args = getPaginationArgs(req)
+
 		try {
+			const totalCount = await prisma.issue.count({
+				where: {
+					applicationId: req.params.application_id,
+					assigned_to: {
+						some: {
+							userId: req?.user?.id,
+						},
+					},
+				},
+			})
+
+			const pageInfo = generatePaginationResult({
+				...args,
+				totalCount,
+			})
 			const issues = await prisma.issue.findMany({
 				where: {
 					applicationId: req.params.application_id,
@@ -320,13 +432,23 @@ router.get(
 						},
 					},
 					comments: true,
-					createdBy: true,
+					createdBy: {
+						select: {
+							name: true,
+							email: true,
+							id: true,
+						},
+					},
+					application: { select: { name: true } },
 				},
+				take: args.limit,
+				skip: args.startIndex,
 			})
 
 			return res.json({
 				success: true,
 				data: issues,
+				pageInfo,
 			})
 		} catch (e) {
 			return res.json({
@@ -384,16 +506,19 @@ router.get('/:id/activity', requireAuth, async (req: ExpressRequest, res) => {
 			where: {
 				id: req.params.id,
 			},
-			include: {
-				comments: true,
-				assigned_to: true,
-				createdBy: true,
+			select: {
+				issueActivity: {
+					include: {
+						author: { select: { name: true } },
+					},
+				},
 			},
 		})
 
 		return res.json({
 			success: true,
-			data: activity,
+			data: activity?.issueActivity,
+			ok: 'ok',
 		})
 	} catch (e) {
 		return res.json({
@@ -402,3 +527,4 @@ router.get('/:id/activity', requireAuth, async (req: ExpressRequest, res) => {
 		})
 	}
 })
+export { router as IssueController }

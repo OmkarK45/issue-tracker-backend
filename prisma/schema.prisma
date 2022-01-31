@@ -91,6 +91,8 @@ model IssuesOnUser {
   userId    String
   issue     Issue    @relation(fields: [issueId], references: [id])
   issueId   String
+
+  @@unique([userId, issueId])
 }
 
 enum StatusType {

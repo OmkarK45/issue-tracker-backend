@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { prisma } from '../config/db'
 import { ExpressRequest } from '../config/express'
+import { requireAuth } from '../middlewares/AuthMiddleware'
 import {
 	generatePaginationResult,
 	getPaginationArgs,
@@ -9,7 +10,7 @@ import {
 const router = Router()
 
 // Create an application
-router.post('/new', async (req: ExpressRequest, res) => {
+router.post('/new', requireAuth, async (req: ExpressRequest, res) => {
 	const { name, description, website, logo } = req.body
 
 	try {
@@ -20,7 +21,9 @@ router.post('/new', async (req: ExpressRequest, res) => {
 				website,
 				logo,
 				createdBy: {
-					connect: { id: req?.user?.id },
+					connect: {
+						email: req?.user?.email,
+					},
 				},
 			},
 		})
@@ -31,6 +34,7 @@ router.post('/new', async (req: ExpressRequest, res) => {
 			message: 'Your application has been created successfully',
 		})
 	} catch (e) {
+		console.log('ERROR', e)
 		return res.json({
 			success: false,
 			error: e,
@@ -40,7 +44,7 @@ router.post('/new', async (req: ExpressRequest, res) => {
 })
 
 // Get all applications
-router.get('/', async (req: ExpressRequest, res) => {
+router.get('/', requireAuth, async (req: ExpressRequest, res) => {
 	const args = getPaginationArgs(req)
 	try {
 		const totalCount = await prisma.application.count({
@@ -75,7 +79,7 @@ router.get('/', async (req: ExpressRequest, res) => {
 })
 
 // Get an application
-router.get('/:id', async (req: ExpressRequest, res) => {
+router.get('/:id', requireAuth, async (req: ExpressRequest, res) => {
 	const { id } = req.params
 	const args = getPaginationArgs(req)
 
@@ -83,8 +87,16 @@ router.get('/:id', async (req: ExpressRequest, res) => {
 		const application = await prisma.application.findUnique({
 			where: { id },
 			include: {
-				issues: true,
-				members: true,
+				members: {
+					select: {
+						name: true,
+						id: true,
+						username: true,
+					},
+				},
+				createdBy: {
+					select: { name: true },
+				},
 				_count: {
 					select: {
 						issues: true,
@@ -108,7 +120,7 @@ router.get('/:id', async (req: ExpressRequest, res) => {
 })
 
 // delete an organization if created by the user
-router.post('/:id/delete', async (req: ExpressRequest, res) => {
+router.post('/:id/delete', requireAuth, async (req: ExpressRequest, res) => {
 	const { id } = req.params
 
 	try {
@@ -150,7 +162,7 @@ router.post('/:id/delete', async (req: ExpressRequest, res) => {
 })
 
 // add a user to org as a member if they have account
-router.post('/:id/add-user', async (req: ExpressRequest, res) => {
+router.post('/:id/add-user', requireAuth, async (req: ExpressRequest, res) => {
 	const { id } = req.params
 	const { email } = req.body
 
@@ -166,7 +178,7 @@ router.post('/:id/add-user', async (req: ExpressRequest, res) => {
 				message: 'Failed to add user to application.',
 			})
 		}
-
+		console.log('IDS ', application.createdById, req?.user?.id)
 		if (application.createdById !== req?.user?.id) {
 			return res.json({
 				success: false,
@@ -198,49 +210,56 @@ router.post('/:id/add-user', async (req: ExpressRequest, res) => {
 })
 
 // remove member from application if they are a member
-router.post('/:id/remove-user', async (req: ExpressRequest, res) => {
-	const { id } = req.params
-	const { email } = req.body
+router.post(
+	'/:id/remove-user',
+	requireAuth,
+	async (req: ExpressRequest, res) => {
+		const { id } = req.params
+		const { email } = req.body
 
-	try {
-		const application = await prisma.application.findUnique({
-			where: { id },
-		})
-
-		if (!application) {
-			return res.json({
-				success: false,
-				error: 'Application not found',
-				message: 'Failed to remove user from application.',
+		try {
+			const application = await prisma.application.findUnique({
+				where: { id },
 			})
-		}
 
-		if (application.createdById !== req?.user?.id) {
-			return res.json({
-				success: false,
-				error: 'You are not authorized to remove a user from this application',
-				message: 'Failed to remove user from application.',
-			})
-		}
+			if (!application) {
+				return res.json({
+					success: false,
+					error: 'Application not found',
+					message: 'Failed to remove user from application.',
+				})
+			}
 
-		await prisma.application.update({
-			where: { id },
-			data: {
-				members: {
-					disconnect: { email },
+			if (application.createdById !== req?.user?.id) {
+				return res.json({
+					success: false,
+					error:
+						'You are not authorized to remove a user from this application',
+					message: 'Failed to remove user from application.',
+				})
+			}
+
+			await prisma.application.update({
+				where: { id },
+				data: {
+					members: {
+						disconnect: { email },
+					},
 				},
-			},
-		})
+			})
 
-		return res.json({
-			success: true,
-			message: 'User removed from application successfully',
-		})
-	} catch (e) {
-		return res.json({
-			success: false,
-			error: e,
-			message: 'Failed to remove user from application.',
-		})
+			return res.json({
+				success: true,
+				message: 'User removed from application successfully',
+			})
+		} catch (e) {
+			return res.json({
+				success: false,
+				error: e,
+				message: 'Failed to remove user from application.',
+			})
+		}
 	}
-})
+)
+
+export { router as OrganizationController }
