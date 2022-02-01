@@ -92,6 +92,7 @@ model IssuesOnUser {
   issue     Issue    @relation(fields: [issueId], references: [id])
   issueId   String
 
+  // we ensure this during api saving
   @@unique([userId, issueId])
 }
 

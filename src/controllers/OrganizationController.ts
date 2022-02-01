@@ -92,6 +92,7 @@ router.get('/:id', requireAuth, async (req: ExpressRequest, res) => {
 						name: true,
 						id: true,
 						username: true,
+						email: true,
 					},
 				},
 				createdBy: {
@@ -153,6 +154,7 @@ router.post('/:id/delete', requireAuth, async (req: ExpressRequest, res) => {
 			message: 'Application deleted successfully',
 		})
 	} catch (e) {
+		console.log(e)
 		return res.json({
 			success: false,
 			error: e,
@@ -167,6 +169,19 @@ router.post('/:id/add-user', requireAuth, async (req: ExpressRequest, res) => {
 	const { email } = req.body
 
 	try {
+		const user = await prisma.user.findUnique({
+			where: { email },
+		})
+
+		if (!user) {
+			return res.json({
+				success: false,
+				error: 'User not found',
+				message:
+					'Requested user does not have account on SimpleIssue. Please create an account.',
+			})
+		}
+
 		const application = await prisma.application.findUnique({
 			where: { id },
 		})

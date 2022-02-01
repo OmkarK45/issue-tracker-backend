@@ -132,22 +132,44 @@ router.post('/:id/update', requireAuth, async (req: ExpressRequest, res) => {
 //  assign issue to list of users
 router.post('/:id/assign', requireAuth, async (req: ExpressRequest, res) => {
 	const user = req.user
-	const { assignedUserId } = req.body as { assignedUserId: string }
+	const { assignedUserIds } = req.body as { assignedUserIds: string[] }
 
 	try {
+		const issue = await prisma.issue.findUnique({
+			where: { id: req.params.id },
+			include: {
+				assigned_to: { select: { user: { select: { id: true } } } },
+			},
+		})
+
+		// check if already assigned and filter assignedUserIds
+		const assignedUserIdsToAssign = assignedUserIds.filter(
+			(userId) =>
+				!issue?.assigned_to.some(
+					(assignedUser) => assignedUser.user.id === userId
+				)
+		)
+		console.log('LIST OF IDS RECIVED', assignedUserIds)
+		console.log('LIST OF IDS TO ASSIGN', assignedUserIdsToAssign)
 		const updatedIssue = await prisma.issue.update({
 			where: {
 				id: req.params.id,
 			},
 			data: {
 				assigned_to: {
-					create: {
-						user: { connect: { id: assignedUserId } },
-					},
+					create: assignedUserIdsToAssign.map((id) => ({
+						user: {
+							connect: {
+								id,
+							},
+						},
+					})),
 				},
 			},
 			include: {
-				assigned_to: { select: { user: { select: { name: true, id: true } } } },
+				assigned_to: {
+					select: { user: { select: { name: true, id: true, email: true } } },
+				},
 			},
 		})
 
@@ -156,10 +178,9 @@ router.post('/:id/assign', requireAuth, async (req: ExpressRequest, res) => {
 				issue: {
 					connect: { id: updatedIssue.id },
 				},
-				text: `${user?.name} assigned issue to ${
-					updatedIssue.assigned_to.find((x) => x.user.id === assignedUserId)
-						?.user.name
-				}`,
+				text: `${user?.name} assigned issue to ${updatedIssue.assigned_to
+					.map((user) => user.user.name)
+					.join(', ')}`,
 				type: 'ASSIGNED',
 				author: {
 					connect: { id: user?.id },
@@ -188,24 +209,47 @@ router.post('/:id/unassign', requireAuth, async (req: ExpressRequest, res) => {
 	const { assignedUserId } = req.body as { assignedUserId: string }
 
 	try {
+		console.log('>>>>>>>>>', assignedUserId)
 		const unAssignedUser = await prisma.user.findUnique({
-			where: { id: assignedUserId },
+			where: {
+				id: assignedUserId,
+			},
+			include: {
+				assigned_issues: {
+					select: { id: true },
+				},
+			},
 		})
+		console.log('UN ASSIGNWED USER', unAssignedUser)
+
 		const issue = await prisma.issue.findUnique({
 			where: { id: req.params.id },
 		})
 
+		console.log(
+			unAssignedUser?.assigned_issues.find(
+				(issue) => issue.id === req.params.id
+			)
+		)
+
 		await prisma.issuesOnUser.delete({
 			where: {
 				userId_issueId: {
-					issueId: issue?.id!,
 					userId: assignedUserId,
+					issueId: req.params.id,
 				},
 			},
 		})
+
 		const updatedIssue = await prisma.issue.findUnique({
 			where: { id: req.params.id },
+			include: {
+				assigned_to: {
+					select: { user: { select: { name: true, id: true, email: true } } },
+				},
+			},
 		})
+
 		const issueActivity = await prisma.issueActivity.create({
 			data: {
 				issue: {
@@ -307,7 +351,9 @@ router.get('/:id', requireAuth, async (req: ExpressRequest, res) => {
 				id: req.params.id,
 			},
 			include: {
-				issueActivity: true,
+				issueActivity: {
+					orderBy: { createdAt: 'asc' },
+				},
 				assigned_to: {
 					select: {
 						user: {
@@ -501,7 +547,13 @@ router.get(
 
 // get activity of an issue
 router.get('/:id/activity', requireAuth, async (req: ExpressRequest, res) => {
+	const args = getPaginationArgs(req)
+
 	try {
+		const totalCount = await prisma.issue.count({
+			where: { id: req.params.id },
+		})
+
 		const activity = await prisma.issue.findUnique({
 			where: {
 				id: req.params.id,
@@ -511,14 +563,24 @@ router.get('/:id/activity', requireAuth, async (req: ExpressRequest, res) => {
 					include: {
 						author: { select: { name: true } },
 					},
+					orderBy: {
+						createdAt: 'desc',
+					},
+					skip: args.startIndex,
+					take: args.limit,
 				},
 			},
+		})
+
+		const pageInfo = generatePaginationResult({
+			...args,
+			totalCount,
 		})
 
 		return res.json({
 			success: true,
 			data: activity?.issueActivity,
-			ok: 'ok',
+			pageInfo,
 		})
 	} catch (e) {
 		return res.json({
