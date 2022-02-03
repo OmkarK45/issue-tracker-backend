@@ -18,6 +18,11 @@ router.post('/new', requireAuth, async (req: ExpressRequest, res) => {
 		req.body
 
 	try {
+		const totalIssues = await prisma.issue.count({
+			where: {
+				applicationId: application_id,
+			},
+		})
 		const newIssue = await prisma.issue.create({
 			data: {
 				description,
@@ -35,6 +40,7 @@ router.post('/new', requireAuth, async (req: ExpressRequest, res) => {
 						id: user?.id,
 					},
 				},
+				number: totalIssues + 1,
 			},
 			include: { application: { select: { name: true } } },
 		})
