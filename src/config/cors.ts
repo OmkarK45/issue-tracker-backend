@@ -15,11 +15,7 @@ OPTIONS request.
  * The `exposedHeaders` property is an array of headers
  */
 export const corsOptions: CorsOptions = {
-	origin: [
-		'http://localhost:3000',
-		'https://simple-issue.vercel.app',
-		'https://simple-issue.up.railway.app',
-	],
+	origin: ['http://localhost:3000', 'https://simpleissue.up.railway.app'],
 	optionsSuccessStatus: 200,
 	credentials: true,
 	exposedHeaders: ['set-cookie'],
